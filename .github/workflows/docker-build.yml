@@ -14,10 +14,9 @@ on:
       - dify-agent/src/**
       - web/Dockerfile
       - dify-agent-runtime/docker/Dockerfile
-      - dify-agent-runtime/go.mod
-      - dify-agent-runtime/go.sum
-      - dify-agent-runtime/cmd/**
-      - dify-agent-runtime/internal/**
+      - dify-agent-runtime/Cargo.toml
+      - dify-agent-runtime/Cargo.lock
+      - dify-agent-runtime/src/**
 
 concurrency:
   group: docker-build-${{ github.head_ref || github.run_id }}
