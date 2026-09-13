@@ -26,14 +26,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: dify-agent-runtime/go.mod
-          cache-dependency-path: dify-agent-runtime/go.sum
+          toolchain: "1.88.0"
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dify-agent-runtime
 
       - name: Run unit tests
-        run: go test -race -count=1 ./...
+        run: cargo test --locked --all-targets
 
   sandbox-runtime-lint:
     name: Sandbox Runtime Lint
@@ -50,17 +55,19 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: dify-agent-runtime/go.mod
-          cache-dependency-path: dify-agent-runtime/go.sum
+          toolchain: "1.88.0"
+          components: clippy
 
-      - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          working-directory: dify-agent-runtime
-          version: latest
+          workspaces: dify-agent-runtime
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets
 
   sandbox-runtime-integration:
     name: Sandbox Runtime Integration Tests
@@ -77,11 +84,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: dify-agent-runtime/go.mod
-          cache-dependency-path: dify-agent-runtime/go.sum
+          toolchain: "1.88.0"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: dify-agent-runtime
 
       - name: Build and start runtime
         run: make integration-up

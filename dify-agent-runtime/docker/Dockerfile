@@ -1,21 +1,30 @@
-# Go shellctl sandbox image — provides a sandboxed runtime environment
+# Rust shellctl sandbox image — provides a sandboxed runtime environment
 # with common dev tools (Node.js, Python, pnpm, uv) for agent-managed jobs.
+#
+# Build-time C: rusqlite and zstd vendor C sources and compile them into the
+# binaries (equivalent of losing Go's CGO_ENABLED=0). The production stage
+# still copies fully-linked ELF files; no libsqlite/libzstd packages are
+# required at runtime beyond glibc.
 #
 # Build:
 #   docker build -f docker/Dockerfile -t dify-agent-local-sandbox:local .
 
-# ── Go build stage ───────────────────────────────────────────────────────────
-FROM golang:1.26 AS go-builder
+# ── Rust build stage ─────────────────────────────────────────────────────────
+FROM rust:1.88-bookworm AS rust-builder
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -o /bin/shellctl ./cmd/shellctl && \
-    CGO_ENABLED=0 go build -o /bin/shellctl-sanitize-pty ./cmd/sanitize-pty && \
-    CGO_ENABLED=0 go build -o /bin/shellctl-runner-exit ./cmd/runner-exit && \
-    CGO_ENABLED=0 go build -o /bin/shellctl-runner ./cmd/runner && \
-    CGO_ENABLED=0 go build -o /bin/dify-agent ./cmd/dify-agent-cli
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+RUN cargo build --release --bins \
+    && test -x /src/target/release/shellctl \
+    && test -x /src/target/release/shellctl-sanitize-pty \
+    && test -x /src/target/release/shellctl-runner-exit \
+    && test -x /src/target/release/shellctl-runner \
+    && test -x /src/target/release/dify-agent
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM python:3.12-slim-bookworm AS production
@@ -63,12 +72,11 @@ RUN apt-get update \
 
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
 
-# Go binaries
-COPY --from=go-builder /bin/shellctl /usr/local/bin/shellctl
-COPY --from=go-builder /bin/shellctl-sanitize-pty /usr/local/bin/shellctl-sanitize-pty
-COPY --from=go-builder /bin/shellctl-runner-exit /usr/local/bin/shellctl-runner-exit
-COPY --from=go-builder /bin/shellctl-runner /usr/local/bin/shellctl-runner
-COPY --from=go-builder /bin/dify-agent /usr/local/bin/dify-agent
+COPY --from=rust-builder /src/target/release/shellctl /usr/local/bin/shellctl
+COPY --from=rust-builder /src/target/release/shellctl-sanitize-pty /usr/local/bin/shellctl-sanitize-pty
+COPY --from=rust-builder /src/target/release/shellctl-runner-exit /usr/local/bin/shellctl-runner-exit
+COPY --from=rust-builder /src/target/release/shellctl-runner /usr/local/bin/shellctl-runner
+COPY --from=rust-builder /src/target/release/dify-agent /usr/local/bin/dify-agent
 
 RUN useradd --create-home --shell /bin/sh dify \
     && mkdir -p /workspace \

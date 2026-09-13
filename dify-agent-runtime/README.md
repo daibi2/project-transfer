@@ -1,17 +1,17 @@
 # dify-agent-runtime
 
-Go implementation of the shellctl server and runtime utilities.
+Rust implementation of the shellctl server and runtime utilities.
 
 ## Architecture
 
 ```
-cmd/
-  shellctl/          - main server binary (shellctl serve)
-  sanitize-pty/      - tmux pipe-pane PTY sanitizer (stdin→stdout filter)
-  runner-exit/       - post-drain SQLite exit recorder
-  dify-agent-cli/    - cli tool talking to agent backend
-  runner/            - process runner to bootstrap agent commands
-internal/            - internal implementations
+src/bin/
+  shellctl.rs                 - main server binary (shellctl serve)
+  shellctl-sanitize-pty.rs    - tmux pipe-pane PTY sanitizer (stdin→stdout filter)
+  shellctl-runner-exit.rs     - post-drain SQLite exit recorder
+  shellctl-runner.rs          - process runner to bootstrap agent commands
+  dify-agent.rs               - CLI talking to agent backend
+src/                          - shared libraries (HTTP, snapshot, landlock, agent CLI)
 ```
 
 ## Job execution modes
@@ -35,7 +35,14 @@ machine-readable control commands and `pty` for interactive jobs.
 make build
 ```
 
-Produces binaries in `bin/`:
+Produces binaries in `bin/`.
+
+**Packaging note:** SQLite (`rusqlite` bundled) and zstd compile C sources at
+**build** time. The previous Go image used `CGO_ENABLED=0`. Runtime images still
+do not install libsqlite/libzstd; they copy glibc-linked ELF binaries.
+
+Requires a Rust toolchain (see `rust-toolchain.toml`) and a C compiler for the
+bundled sqlite/zstd build.
 
 ### Building docker image
 
@@ -83,7 +90,7 @@ The runner sets `TMPDIR`, `TMP`, and `TEMP` directly to the job's `cwd`. It does
 
 ### Environment Variables
 
-See [here](./internal/envvar/envvar.go)
+See `src/envvar.rs`.
 
 Requires Linux ≥ 5.13. On unsupported kernels, a warning is printed to stderr.
 
@@ -98,7 +105,7 @@ and must bound the streams in their own logic** (count bytes while reading a
 save stream and abort at their cap; bound what they send to restore).
 
 Each operation carries a total I/O deadline set by `SHELLCTL_SNAPSHOT_TIMEOUT`,
-a Go duration string (`10m`, `15m30s`). It bounds how long a stalled peer —
+a Go-style duration string (`10m`, `15m30s`). It bounds how long a stalled peer —
 connection open, nobody reading — can hold the single-operation gate; a peer
 that closes the connection releases it immediately. Unset or empty uses the
 built-in default; an unparseable or non-positive value fails startup rather
@@ -116,8 +123,8 @@ than falling back to it.
   `X-Snapshot-Sha256`, `X-Snapshot-Bytes`; a cleanly terminated stream WITHOUT
   the `ok` trailer, or an aborted connection, is a failure.
 - `POST /v1/snapshot/restore` — raw tar+zstd body, no parameters. Extracts
-  into `$HOME` under `os.Root` (path traversal, absolute names, and symlink
-  escapes are refused). Returns `{"entries": N, "bytes_written": M}`;
+  into `$HOME` under a capability-style directory handle (path traversal,
+  absolute names, and symlink escapes are refused). Returns `{"entries": N, "bytes_written": M}`;
   `400 archive_malformed` for invalid input, `500 restore_failed` for
   non-format failures (e.g. filesystem or environmental errors). Restore is
   NOT transactional — a mid-stream failure can leave a partially restored
@@ -128,6 +135,6 @@ than falling back to it.
 
 ## Dependencies
 
-- Go 1.26
-- `modernc.org/sqlite` (pure-Go SQLite driver, no CGO required)
+- Rust 1.88
+- `rusqlite` with bundled SQLite (C compiled at build time)
 - tmux (runtime dependency, not a build dependency)

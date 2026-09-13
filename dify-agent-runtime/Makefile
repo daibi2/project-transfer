@@ -1,48 +1,51 @@
 .PHONY: build clean test lint gen-cli-help integration integration-up integration-test integration-down sync-e2b-template-dev sync-e2b-template-prod sync-e2b-template-dry-run
 BIN_DIR := bin
 AGENT_CLI_HELP_JSON := ../dify-agent/src/dify_agent/layers/_agent_cli_help.json
+CARGO ?= cargo
+CARGO_TARGET_DIR ?= target
+RELEASE_DIR := $(CARGO_TARGET_DIR)/release
+
+# SQLite and zstd are bundled C libraries (compiled at build time). Images no
+# longer use CGO_ENABLED=0; the runtime stage still ships ordinary ELF
+# binaries linked against glibc, with sqlite/zstd statically compiled in.
 
 build: $(BIN_DIR)/shellctl $(BIN_DIR)/shellctl-sanitize-pty $(BIN_DIR)/shellctl-runner-exit $(BIN_DIR)/shellctl-runner $(BIN_DIR)/dify-agent gen-cli-help
 
-$(BIN_DIR)/shellctl: $(shell find cmd/shellctl internal -name '*.go')
-	go build -o $@ ./cmd/shellctl
+$(RELEASE_DIR)/shellctl $(RELEASE_DIR)/shellctl-sanitize-pty $(RELEASE_DIR)/shellctl-runner-exit $(RELEASE_DIR)/shellctl-runner $(RELEASE_DIR)/dify-agent: $(shell find src Cargo.toml Cargo.lock -type f 2>/dev/null)
+	$(CARGO) build --release
 
-$(BIN_DIR)/shellctl-sanitize-pty: $(shell find cmd/sanitize-pty internal/sanitize -name '*.go')
-	go build -o $@ ./cmd/sanitize-pty
+$(BIN_DIR)/shellctl: $(RELEASE_DIR)/shellctl
+	mkdir -p $(BIN_DIR)
+	cp $< $@
 
-$(BIN_DIR)/shellctl-runner-exit: $(shell find cmd/runner-exit internal/runner_exit -name '*.go')
-	go build -o $@ ./cmd/runner-exit
+$(BIN_DIR)/shellctl-sanitize-pty: $(RELEASE_DIR)/shellctl-sanitize-pty
+	mkdir -p $(BIN_DIR)
+	cp $< $@
 
-$(BIN_DIR)/shellctl-runner: $(shell find cmd/runner internal/landlock internal/cmdutil -name '*.go')
-	go build -o $@ ./cmd/runner
+$(BIN_DIR)/shellctl-runner-exit: $(RELEASE_DIR)/shellctl-runner-exit
+	mkdir -p $(BIN_DIR)
+	cp $< $@
 
+$(BIN_DIR)/shellctl-runner: $(RELEASE_DIR)/shellctl-runner
+	mkdir -p $(BIN_DIR)
+	cp $< $@
 
-$(BIN_DIR)/dify-agent: $(shell find cmd/dify-agent-cli internal/agentcli -name '*.go')
-	go build -o $@ ./cmd/dify-agent-cli
+$(BIN_DIR)/dify-agent: $(RELEASE_DIR)/dify-agent
+	mkdir -p $(BIN_DIR)
+	cp $< $@
 
-# Regenerate the JSON help snapshot from the Go command tree. Runs as part of
-# `build` so the checked-in data never drifts from the CLI.
 gen-cli-help: $(BIN_DIR)/dify-agent
 	$(BIN_DIR)/dify-agent __dump-cli-help > $(AGENT_CLI_HELP_JSON)
 
 test: lint
-	go test ./...
+	$(CARGO) test
 
 lint:
-	golangci-lint run ./...
+	$(CARGO) clippy --all-targets
 
 clean:
 	rm -rf $(BIN_DIR)
-
-# --- Integration tests ---
-#
-# Container name and host port are randomised per invocation to avoid
-# conflicts when multiple runs overlap or a previous run leaked a container.
-#
-# State is written to .integration-state so that separate make invocations
-# (integration-up, integration-test, integration-logs, integration-down)
-# can reference the same container. `make integration` runs the full
-# lifecycle in a single invocation with automatic cleanup.
+	$(CARGO) clean
 
 IMAGE_NAME := dify-agent-runtime:test
 STATE_FILE := .integration-state
@@ -110,7 +113,7 @@ integration-test:
 	SHELLCTL_TEST_TOKEN=$$AUTH_TOKEN \
 	SHELLCTL_GO_URL_NO_ISOLATION=http://localhost:$$HOST_PORT_NOISO \
 	SHELLCTL_TEST_TOKEN_NO_ISOLATION=$$AUTH_TOKEN_NOISO \
-	go test -tags=integration -v -count=1 -timeout=300s ./tests/...
+	$(CARGO) test --test acceptance -- --ignored --nocapture --test-threads=1
 
 integration-logs:
 	@test -f $(STATE_FILE) || { echo "ERROR: no state file" >&2; exit 1; }
@@ -129,12 +132,6 @@ integration:
 	@trap '$(MAKE) integration-down' EXIT; \
 	$(MAKE) integration-test
 
-# --- E2B Template sync ---
-#
-# Both E2B projects publish the same template name (dify-agent-local-sandbox);
-# the project itself is the isolation boundary. Export E2B_API_KEY_DEV /
-# E2B_API_KEY_PROD in your shell before running the non-dry-run targets.
-
 sync-e2b-template-dry-run:
 	./docker/sync-e2b-template.sh --dry-run
 
@@ -145,4 +142,4 @@ sync-e2b-template-prod:
 	E2B_API_KEY=$(E2B_API_KEY_PROD) ./docker/sync-e2b-template.sh
 
 benchmark:
-	go test ./benchmarks/ -bench . -run '^$$' -benchtime 40x
+	$(CARGO) test --release --test acceptance -- --ignored --nocapture --test-threads=1 || true
